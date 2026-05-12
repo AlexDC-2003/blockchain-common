@@ -110,7 +110,9 @@ class Lab2Community(Community):
         self.current_nonce = None
         self.collected_sigs = {}  # round_number -> {member_index: signature}
         self.all_done = False
-        self.t0 = None  # local clock alex might remove not sure if i need it?
+        self.acked_rounds = set()  # rounds the server confirmed success for
+        self.retransmit_interval = 0.5
+        self.t0 = None  # local clock, might remove not sure if i need it?
 
         # handlers for all possible received messages
         self.add_message_handler(ChallengeResponsePayload, self.on_challenge_response)
@@ -203,6 +205,8 @@ class Lab2Community(Community):
         my_sig = self.sign(nonce)
         self.collected_sigs[round_nr][self.my_index] = my_sig
 
+        asyncio.create_task(self._retransmit_nonce(round_nr))
+
     @lazy_wrapper(NonceAnnouncePayload)
     def on_nonce_announce(self, peer, payload):
         pk = peer.public_key.key_to_bin()
@@ -211,9 +215,11 @@ class Lab2Community(Community):
 
         round_nr = payload.round_number
         nonce = payload.nonce
+        if round_nr > self.current_round:
+            self.current_round = round_nr
         sig = self.sign(nonce)
         print(f"[round {round_nr}] signing for member{self.members.index(pk)+1}")
-        
+
         self.ez_send(peer, SignatureSharePayload(round_number=round_nr, signature=sig))
 
     @lazy_wrapper(SignatureSharePayload)
@@ -248,6 +254,7 @@ class Lab2Community(Community):
         )
         print(f"[round {rnd}] submitting bundle")
         self.ez_send(self.server_peer, sig_bundle_payload)
+        asyncio.create_task(self._retransmit_bundle(rnd, sig_bundle_payload))
 
     # also daca cumva eu sunt urm submitter sa incep eu runda(nu stiu ce e asta e edge case care aparea la claude in plan)
     @lazy_wrapper(RoundResultPayload)
@@ -258,6 +265,7 @@ class Lab2Community(Community):
             print(f"[round {payload.round_number}] failed")
             return
         print(f"[round {payload.round_number}] success")
+        self.acked_rounds.add(payload.round_number)
         if payload.rounds_completed >= 3:
             self.all_done = True
             return
@@ -267,6 +275,7 @@ class Lab2Community(Community):
             team_peer = self._find_peer(key)
             if team_peer is not None:
                 self.ez_send(team_peer, RoundDonePayload(round_number=payload.round_number))
+        asyncio.create_task(self._retransmit_round_done(payload.round_number))
 
     @lazy_wrapper(RoundDonePayload)
     def on_round_done(self, peer, payload):
@@ -279,6 +288,49 @@ class Lab2Community(Community):
         if self.my_index == next_round - 1:
             self.current_round = next_round
             self.request_challenge()
+
+    # ----- retransmit for packet-loss recovery -----
+
+    async def _retransmit_nonce(self, rnd):
+        # submitter rebroadcasts the nonce to teammates that haven't replied yet
+        while not self.all_done:
+            await asyncio.sleep(self.retransmit_interval)
+            if rnd in self.acked_rounds or self.current_round > rnd:
+                return
+            sigs = self.collected_sigs.get(rnd, {})
+            if len(sigs) >= 3:
+                return
+            for key in self.members:
+                if key == self.my_pubkey():
+                    continue
+                idx = self.members.index(key)
+                if idx in sigs:
+                    continue
+                team_peer = self._find_peer(key)
+                if team_peer is not None:
+                    self.ez_send(team_peer, NonceAnnouncePayload(round_number=rnd, nonce=self.current_nonce))
+
+    async def _retransmit_bundle(self, rnd, payload):
+        # submitter resends the bundle until the server acks this round
+        while not self.all_done:
+            await asyncio.sleep(self.retransmit_interval)
+            if rnd in self.acked_rounds:
+                return
+            if self.server_peer is not None:
+                self.ez_send(self.server_peer, payload)
+
+    async def _retransmit_round_done(self, rnd):
+        # previous submitter nudges the next submitter until round rnd+1 starts
+        while not self.all_done:
+            await asyncio.sleep(self.retransmit_interval)
+            if self.current_round > rnd or self.all_done:
+                return
+            for key in self.members:
+                if key == self.my_pubkey():
+                    continue
+                team_peer = self._find_peer(key)
+                if team_peer is not None:
+                    self.ez_send(team_peer, RoundDonePayload(round_number=rnd))
 
 # main
 async def main():
