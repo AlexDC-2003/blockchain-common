@@ -216,7 +216,6 @@ class Lab2Community(Community):
         
         self.ez_send(peer, SignatureSharePayload(round_number=round_nr, signature=sig))
 
-
     @lazy_wrapper(SignatureSharePayload)
     def on_signature_received(self, peer, payload):
         pk = peer.public_key.key_to_bin()
@@ -232,29 +231,58 @@ class Lab2Community(Community):
         print(f"[round {round_nr}] got sig from member{sender_index+1}")
         self._maybe_submit_bundle(round_nr)
 
-    # TODO alex: daca nu am toate 3 signatures sau nu sunt eu submitter skip(pt asta fa un if cu  my_index == rnd-1 si membrul ala da submit)
-    # dupa creezi SignatureBundlePayload si dai la server cu ez send
     def _maybe_submit_bundle(self, rnd):
-        pass
+        # if I am not a submitter, skip
+        if self.my_index != rnd-1:
+            return
+        # if not all signatures have been collected, skip
+        sigs = self.collected_sigs.get(rnd, {})
+        if len(sigs) != 3:  
+            return
+        sig_bundle_payload = SignatureBundlePayload(
+            group_id = self.group_id,
+            round_number = rnd,
+            sig1 = sigs[0],
+            sig2 = sigs[1],
+            sig3 = sigs[2]
+        )
+        print(f"[round {rnd}] submitting bundle")
+        self.ez_send(self.server_peer, sig_bundle_payload)
 
-
-    # TODO alex: handle respunsul de la server, print daca e succes pt log, daca e fail return
-    # daca rounds_completed e 3 return plus set all_done la true, else trimite round doen payload to rest ca sa inceapa urmatorul submitter runda urm
     # also daca cumva eu sunt urm submitter sa incep eu runda(nu stiu ce e asta e edge case care aparea la claude in plan)
     @lazy_wrapper(RoundResultPayload)
     def on_round_result(self, peer, payload):
-        pass
+        if peer.public_key.key_to_bin() != self.server_pk:
+            return
+        if not payload.success:
+            print(f"[round {payload.round_number}] failed")
+            return
+        print(f"[round {payload.round_number}] success")
+        if payload.rounds_completed >= 3:
+            self.all_done = True
+            return
+        for key in self.members:
+            if key == self.my_pubkey():
+                continue
+            team_peer = self._find_peer(key)
+            if team_peer is not None:
+                self.ez_send(team_peer, RoundDonePayload(round_number=payload.round_number))
 
-
-    # TODO alex: am primit un round done de la cnv prin func da mai sus, intai verific ca acel cnv sa fie in din grup
-    # calculez next_round = payload.round_number + 1(return daca >3), si daca: my_index == next_round - 1 =>  self.current_round = next_round si self.request_challenge()
     @lazy_wrapper(RoundDonePayload)
     def on_round_done(self, peer, payload):
-        pass
+        pk = peer.public_key.key_to_bin()
+        if pk not in self.members:
+            return
+        next_round = payload.round_number + 1
+        if next_round > 3:
+            return
+        if self.my_index == next_round - 1:
+            self.current_round = next_round
+            self.request_challenge()
 
 # main
-# TODO alex: combini tot ce e mai sus, am dat eu copy paste la fluff tu tb sa faci combinarea functiilor. good luck! :)))
 async def main():
+    #TODO: Fill your key file
     MY_KEY_FILE = "your pem file name"
     MEMBER1 = bytes.fromhex("4c69624e61434c504b3ac117a8cfc7b28b662c9707255b962f1848c0fe7dc1938af68f116884760ea26f6e4901c5dce1ee2bfd23cbc537a9f888308cb343cd67746516a24b54a8d45e3c")
     MEMBER2 = bytes.fromhex("4c69624e61434c504b3a2203abd94c9a33c8d18f9fc76093fe83629cafa13b83f568e0519d0d16e2e6322d1413efce2211605e4ab47aff0f9880f36227b691cf20022feeeb4d73d9da64")
@@ -279,7 +307,6 @@ async def main():
     await ipv8.start()
     community = ipv8.get_overlay(Lab2Community)
 
-
     my_pk = community.my_pubkey()
     print("My pubkey:", my_pk.hex())
     if my_pk not in community.members:
@@ -288,7 +315,34 @@ async def main():
     community.my_index = community.members.index(my_pk)
     print(f"I am member{community.my_index + 1}")
 
+    while True:
+        community.server_peer = community._find_peer(community.server_pk)
+        teammates_seen = True
+        for k in community.members:
+            if k == my_pk:
+                continue
+            if community._find_peer(k) is None:
+                teammates_seen = False
+                break
+        if community.server_peer is not None and teammates_seen:
+            break
+        await asyncio.sleep(0.5)
+    print("found server and teammates")
+    
+    # one-time ready handshake before round 1
+    while not community.everyone_ready():
+        community.broadcast_ready()
+        await asyncio.sleep(0.5)
+    print("everyone ready")
+    
+    # round 1 submitter kicks off
+    if community.my_index == 0:
+        community.request_challenge()
 
+    while not community.all_done:
+        await asyncio.sleep(0.2)
+    print("all rounds done")
+    await ipv8.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
