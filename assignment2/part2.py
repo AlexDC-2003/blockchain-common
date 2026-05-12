@@ -111,6 +111,7 @@ class Lab2Community(Community):
         self.collected_sigs = {}  # round_number -> {member_index: signature}
         self.all_done = False
         self.acked_rounds = set()  # rounds the server confirmed success for
+        self.activate_retransmission = True # debug if retransmission doesn't work
         self.retransmit_interval = 0.5
         self.t0 = None  # local clock, might remove not sure if i need it?
 
@@ -176,7 +177,6 @@ class Lab2Community(Community):
             return True
         return False
 
-
     # round starts
     def request_challenge(self):
         print(f"[round {self.current_round + 1}] requesting challenge")
@@ -204,8 +204,8 @@ class Lab2Community(Community):
 
         my_sig = self.sign(nonce)
         self.collected_sigs[round_nr][self.my_index] = my_sig
-
-        asyncio.create_task(self._retransmit_nonce(round_nr))
+        if self.activate_retransmission:
+            asyncio.create_task(self._retransmit_nonce(round_nr))
 
     @lazy_wrapper(NonceAnnouncePayload)
     def on_nonce_announce(self, peer, payload):
@@ -254,7 +254,8 @@ class Lab2Community(Community):
         )
         print(f"[round {rnd}] submitting bundle")
         self.ez_send(self.server_peer, sig_bundle_payload)
-        asyncio.create_task(self._retransmit_bundle(rnd, sig_bundle_payload))
+        if self.activate_retransmission:
+            asyncio.create_task(self._retransmit_bundle(rnd, sig_bundle_payload))
 
     # also daca cumva eu sunt urm submitter sa incep eu runda(nu stiu ce e asta e edge case care aparea la claude in plan)
     @lazy_wrapper(RoundResultPayload)
@@ -275,7 +276,8 @@ class Lab2Community(Community):
             team_peer = self._find_peer(key)
             if team_peer is not None:
                 self.ez_send(team_peer, RoundDonePayload(round_number=payload.round_number))
-        asyncio.create_task(self._retransmit_round_done(payload.round_number))
+        if self.activate_retransmission:
+            asyncio.create_task(self._retransmit_round_done(payload.round_number))
 
     @lazy_wrapper(RoundDonePayload)
     def on_round_done(self, peer, payload):
