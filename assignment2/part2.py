@@ -26,71 +26,65 @@ import time
 #     message: str
  
  
+from ipv8.messaging.payload_dataclass import convert_to_payload
+
 @dataclass
-class ChallengeRequestPayload(DataClassPayload[3]):
-    format_list = ["varlenHutf8"]
+class ChallengeRequestPayload:
     group_id: str
- 
- 
+
 @dataclass
-class ChallengeResponsePayload(DataClassPayload[4]):
-    format_list = ["varlenH", "q", "d"]
+class ChallengeResponsePayload:
     nonce: bytes
     round_number: int
     deadline: float
- 
- 
+
 @dataclass
-class SignatureBundlePayload(DataClassPayload[5]):
-    format_list = ["varlenHutf8", "q", "varlenH", "varlenH", "varlenH"]
+class SignatureBundlePayload:
     group_id: str
     round_number: int
     sig1: bytes
     sig2: bytes
     sig3: bytes
- 
- 
+
 @dataclass
-class RoundResultPayload(DataClassPayload[6]):
-    format_list = ["?", "q", "q", "varlenHutf8"]
+class RoundResultPayload:
     success: bool
     round_number: int
     rounds_completed: int
     message: str
- 
- 
-# ----------------- communicate between us -----------------
- 
+
 @dataclass
-class ReadyPayload(DataClassPayload[7]):
-    format_list = ["varlenHutf8"]
-    note: str 
- 
- 
+class ReadyPayload:
+    note: str
+
 @dataclass
-class NonceAnnouncePayload(DataClassPayload[8]):
-    format_list = ["q", "varlenH"]
+class NonceAnnouncePayload:
     round_number: int
     nonce: bytes
- 
- 
+
 @dataclass
-class SignatureSharePayload(DataClassPayload[9]):
-    format_list = ["q", "varlenH"]
+class SignatureSharePayload:
     round_number: int
     signature: bytes
- 
- 
+
 @dataclass
-class RoundDonePayload(DataClassPayload[10]):
-    format_list = ["q"]
+class RoundDonePayload:
     round_number: int
+
+convert_to_payload(ChallengeRequestPayload, msg_id=3)
+convert_to_payload(ChallengeResponsePayload, msg_id=4)
+convert_to_payload(SignatureBundlePayload, msg_id=5)
+convert_to_payload(RoundResultPayload, msg_id=6)
+convert_to_payload(ReadyPayload, msg_id=7)
+convert_to_payload(NonceAnnouncePayload, msg_id=8)
+convert_to_payload(SignatureSharePayload, msg_id=9)
+convert_to_payload(RoundDonePayload, msg_id=10)
 
 class Lab2Settings(CommunitySettings):
     member1_key: bytes = b"4c69624e61434c504b3ac117a8cfc7b28b662c9707255b962f1848c0fe7dc1938af68f116884760ea26f6e4901c5dce1ee2bfd23cbc537a9f888308cb343cd67746516a24b54a8d45e3c"
     member2_key: bytes = b"4c69624e61434c504b3a2203abd94c9a33c8d18f9fc76093fe83629cafa13b83f568e0519d0d16e2e6322d1413efce2211605e4ab47aff0f9880f36227b691cf20022feeeb4d73d9da64"
     member3_key: bytes = b"4c69624e61434c504b3a92170169432c64a01d2462ddcfd589ef83c6fb39c4892b248adb834f702a321c1050fd59c0b5510aac9e282a4b3e0416083901551b90d524df4629479eebe5d1"
-    group_id: str = "5a69b03f8adf9b9e"
+    group_id: str = "65db51e2655da2e3"
 
 class Lab2Community(Community):
     community_id = bytes.fromhex("4c61623247726f75705369676e696e6732303236")
@@ -257,7 +251,6 @@ class Lab2Community(Community):
         if self.activate_retransmission:
             asyncio.create_task(self._retransmit_bundle(rnd, sig_bundle_payload))
 
-    # also daca cumva eu sunt urm submitter sa incep eu runda(nu stiu ce e asta e edge case care aparea la claude in plan)
     @lazy_wrapper(RoundResultPayload)
     def on_round_result(self, peer, payload):
         if peer.public_key.key_to_bin() != self.server_pk:
@@ -266,10 +259,10 @@ class Lab2Community(Community):
             print(f"[round {payload.round_number}] failed")
             return
         print(f"[round {payload.round_number}] success")
+        print(payload.message)
         self.acked_rounds.add(payload.round_number)
         if payload.rounds_completed >= 3:
             self.all_done = True
-            return
         for key in self.members:
             if key == self.my_pubkey():
                 continue
@@ -286,6 +279,7 @@ class Lab2Community(Community):
             return
         next_round = payload.round_number + 1
         if next_round > 3:
+            self.all_done = True
             return
         if self.my_index == next_round - 1:
             self.current_round = next_round
@@ -337,11 +331,11 @@ class Lab2Community(Community):
 # main
 async def main():
     #TODO: Fill your key file
-    MY_KEY_FILE = "your pem file name"
+    MY_KEY_FILE = "my_key.pem"
     MEMBER1 = bytes.fromhex("4c69624e61434c504b3ac117a8cfc7b28b662c9707255b962f1848c0fe7dc1938af68f116884760ea26f6e4901c5dce1ee2bfd23cbc537a9f888308cb343cd67746516a24b54a8d45e3c")
     MEMBER2 = bytes.fromhex("4c69624e61434c504b3a2203abd94c9a33c8d18f9fc76093fe83629cafa13b83f568e0519d0d16e2e6322d1413efce2211605e4ab47aff0f9880f36227b691cf20022feeeb4d73d9da64")
     MEMBER3 = bytes.fromhex("4c69624e61434c504b3a92170169432c64a01d2462ddcfd589ef83c6fb39c4892b248adb834f702a321c1050fd59c0b5510aac9e282a4b3e0416083901551b90d524df4629479eebe5d1")
-    GROUP_ID = "5a69b03f8adf9b9e"
+    GROUP_ID = "65db51e2655da2e3"
 
     builder = ConfigBuilder().clear_keys().clear_overlays()
     builder.add_key("my key", "curve25519", MY_KEY_FILE)
@@ -383,18 +377,16 @@ async def main():
         await asyncio.sleep(0.5)
     print("found server and teammates")
     
-    # one-time ready handshake before round 1
-    while not community.everyone_ready():
+    done = False
+    while not community.all_done:
         community.broadcast_ready()
         await asyncio.sleep(0.5)
-    print("everyone ready")
-    
-    # round 1 submitter kicks off
-    if community.my_index == 0:
-        community.request_challenge()
-
-    while not community.all_done:
+        if community.everyone_ready() and not done:
+            if community.my_index == 0:
+                done = True
+                community.request_challenge()
         await asyncio.sleep(0.2)
+    print("everyone ready")
     print("all rounds done")
     await ipv8.stop()
 
