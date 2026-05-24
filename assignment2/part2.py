@@ -7,6 +7,7 @@ from ipv8_service import IPv8
 import asyncio
 import time
  
+ 
 # ----------------- communicate with server -----------------
  
 # @dataclass
@@ -362,7 +363,6 @@ async def main():
     community.my_index = community.members.index(my_pk)
     print(f"I am member{community.my_index + 1}")
 
-    print("searching for server and teammates")
     while True:
         community.server_peer = community._find_peer(community.server_pk)
         teammates_seen = True
@@ -372,8 +372,6 @@ async def main():
             if community._find_peer(k) is None:
                 teammates_seen = False
                 break
-        if community.server_peer:
-            print("found sv")
         if community.server_peer is not None and teammates_seen:
             break
         await asyncio.sleep(0.5)
