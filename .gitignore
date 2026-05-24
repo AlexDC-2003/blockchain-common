@@ -1,2 +1,4 @@
 *.pem
 *.md
+assignment1/
+test_*.py
