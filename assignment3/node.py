@@ -74,3 +74,32 @@ class BlockChain:
             if tx.tx_hash() not in included:
                 new_mempool.append(tx)
         self.mempool = new_mempool
+
+    def fork_switch(self, fork_point, new_blocks):
+        discarded_txs = []
+        for block in self.blocks[fork_point + 1:]:
+            discarded_txs.extend(block.transactions)
+        self.blocks = self.blocks[:fork_point + 1]
+        self._confirmed_tx_hashes = set()
+        for block in self.blocks:
+            for tx in block.transactions:
+                self._confirmed_tx_hashes.add(tx.tx_hash())
+        for block in new_blocks:
+            self._append(block)
+        for tx in discarded_txs:
+            self.add_transaction(tx)
+
+    def prepare_next(self, difficulty, timestamp = None, max_txs = None):
+        if timestamp is not None:
+            ts = timestamp
+        else:
+            ts = int(time.time())
+        if max_txs is None:
+            txs = list(self.mempool)
+        else:
+            txs = list(self.mempool[:max_txs])
+        commitment = compute_txs_hash(txs)
+        prev = self.tip.hash
+        nonce, _ = mine(prev, commitment, ts, difficulty)
+        block = Block(prev, commitment, ts, difficulty, nonce, txs)
+        return block
