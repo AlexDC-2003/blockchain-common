@@ -16,8 +16,8 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 REGISTRATION_COMMUNITY_ID = "4c616233426c6f636b636861696e323032365057"
 SERVER_PUBLIC_KEY = "4c69624e61434c504b3ae3fc099fb56ca3b5e1de9a1c843387f2acdbb78b1bd4350ffde518068a0d246344b10d0d8c355fd0d76873e7d7f7838f3715e025af08f791324495e083331ce6"
 
-# TODO: get group id from assign 2
-GROUP_ID = ""
+# Get group id from assign 2
+GROUP_ID = "65db51e2655da2e3"
 
 # Our self-chosen blockchain community ID (must match the one in community.py)
 BLOCKCHAIN_COMMUNITY_ID = "04c2aa6ce092029eeb113660172c1da47b7ab028"

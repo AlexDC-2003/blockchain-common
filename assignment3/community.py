@@ -5,18 +5,43 @@ from ipv8.lazy_community import lazy_wrapper
 from ipv8.configuration import ConfigBuilder, Strategy, WalkerDefinition, default_bootstrap_defs
 from ipv8_service import IPv8
 from ipv8.messaging.payload_dataclass import convert_to_payload
+from ipv8.keyvault.crypto import default_eccrypto
 import asyncio
+import struct
 import time
 
 from chain import Block, Transaction
 from node import BlockChain
 
-COMMUNITY_ID = bytes.fromhex("4c616233426c6f636b636861696e323032365057")
+COMMUNITY_ID = bytes.fromhex("04c2aa6ce092029eeb113660172c1da47b7ab028")
 SERVER_PUBLIC_KEY = bytes.fromhex("4c69624e61434c504b3ae3fc099fb56ca3b5e1de9a1c843387f2acdbb78b1bd4350ffde518068a0d246344b10d0d8c355fd0d76873e7d7f7838f3715e025af08f791324495e083331ce6")
 MINING_DIFFICULTY = 20  # we have to pick this
 MEMBER1 = bytes.fromhex("4c69624e61434c504b3ac117a8cfc7b28b662c9707255b962f1848c0fe7dc1938af68f116884760ea26f6e4901c5dce1ee2bfd23cbc537a9f888308cb343cd67746516a24b54a8d45e3c")
 MEMBER2 = bytes.fromhex("4c69624e61434c504b3a2203abd94c9a33c8d18f9fc76093fe83629cafa13b83f568e0519d0d16e2e6322d1413efce2211605e4ab47aff0f9880f36227b691cf20022feeeb4d73d9da64")
 MEMBER3 = bytes.fromhex("4c69624e61434c504b3a92170169432c64a01d2462ddcfd589ef83c6fb39c4892b248adb834f702a321c1050fd59c0b5510aac9e282a4b3e0416083901551b90d524df4629479eebe5d1")
+
+@dataclass
+class SubmitTransaction:
+    sender_key: bytes
+    data: bytes
+    timestamp: int
+    signature: bytes
+
+@dataclass
+class SubmitTxResponse:
+    success: bool
+    tx_hash: bytes
+    message: str
+
+@dataclass
+class GetChainHeight:
+    request_id: int
+
+@dataclass
+class ChainHeightResponse:
+    request_id: int
+    height: int
+    tip_hash: bytes
 
 @dataclass
 class GetBlock:
@@ -32,6 +57,7 @@ class BlockResponse:
     nonce: int
     block_hash: bytes
     tx_hashes: bytes
+    # txs_blob: bytes   # TODO: added the transaction (ask team)
 
 @dataclass
 class BlockPropagate:
@@ -43,7 +69,12 @@ class BlockPropagate:
     nonce: int
     block_hash: bytes
     tx_hashes: bytes
+    # txs_blob: bytes   # TODO: added the transaction (ask team)
 
+convert_to_payload(SubmitTransaction, msg_id=1)
+convert_to_payload(SubmitTxResponse, msg_id=2)
+convert_to_payload(GetChainHeight, msg_id=3)
+convert_to_payload(ChainHeightResponse, msg_id=4)
 convert_to_payload(GetBlock, msg_id=5)
 convert_to_payload(BlockResponse, msg_id=6)
 convert_to_payload(BlockPropagate, msg_id=7)
@@ -72,6 +103,9 @@ class BlockchainCommunity(Community):
         self.add_message_handler(BlockPropagate, self.on_block_propagate)
         self.add_message_handler(GetBlock, self.on_get_block)
         self.add_message_handler(BlockResponse, self.on_block_response)
+        	
+        self.add_message_handler(SubmitTransaction, self.on_submit_transaction)
+        self.add_message_handler(GetChainHeight, self.on_get_chain_height)
     
     def my_pubkey(self):
         return self.my_peer.public_key.key_to_bin()
@@ -93,6 +127,7 @@ class BlockchainCommunity(Community):
             nonce=block.nonce,
             block_hash=block.hash,
             tx_hashes=b"".join(tx.tx_hash() for tx in block.transactions),
+            #txs_blob=serialize_txs(block.transactions),   # TODO
         )
         for k in self.members:
             if k == self.my_pubkey():
@@ -152,6 +187,8 @@ class BlockchainCommunity(Community):
                 difficulty=msg.difficulty,
                 nonce=msg.nonce,
                 transactions=[]
+                #transactions=deserialize_txs(msg.txs_blob),   # TODO: changed from empty bc there might be others?
+
             )
             result = self.blockchain.validate_extension(block)
             if result.ok:
@@ -226,6 +263,8 @@ class BlockchainCommunity(Community):
             nonce=block.nonce,
             block_hash=block.hash,
             tx_hashes=b"".join(tx.tx_hash() for tx in block.transactions),
+            #txs_blob=serialize_txs(block.transactions),   # TODO
+
         )
         self.ez_send(peer, response)
 
@@ -246,8 +285,68 @@ class BlockchainCommunity(Community):
             difficulty=msg.difficulty,
             nonce=msg.nonce,
             transactions=[]
+            #transactions=deserialize_txs(msg.txs_blob),   # TODO: changed from empty bc there might be others?
+
         )
         self._pending_block_requests[msg.height].set_result(block)
+
+    @lazy_wrapper(SubmitTransaction)
+    def on_submit_transaction(self, peer, msg):
+        # Only accept submissions from the server
+        if peer.public_key.key_to_bin() != self.server_public_key:
+            print(f"Received submit transaction from non-server peer {peer.public_key.key_to_bin().hex()}, ignoring")
+            return
+        tx = Transaction(
+            sender_key=msg.sender_key,
+            data=msg.data,
+            timestamp=msg.timestamp,
+            signature=msg.signature,
+        )
+        tx_hash = tx.tx_hash()
+        # Verify the signature over sender_key + data + timestamp_8byte_be
+        signed_data = msg.sender_key + msg.data + struct.pack(">q", msg.timestamp)
+        try:
+            sender_pk = default_eccrypto.key_from_public_bin(msg.sender_key)
+            valid = default_eccrypto.is_valid_signature(sender_pk, signed_data, msg.signature)
+        except Exception as e:
+            print(f"Could not verify signature: {e}")
+            valid = False
+        if not valid:
+            print(f"Rejected transaction: invalid signature")
+            self.ez_send(peer, SubmitTxResponse(
+                success=False,
+                tx_hash=tx_hash,
+                message="Invalid signature",
+            ))
+            return
+        added = self.blockchain.add_transaction(tx)
+        if added:
+            print(f"Accepted transaction {tx_hash.hex()[:16]}... into mempool")
+            self.ez_send(peer, SubmitTxResponse(
+                success=True,
+                tx_hash=tx_hash,
+                message="Accepted into mempool",
+            ))
+        else:
+            print(f"Transaction {tx_hash.hex()[:16]}... already known")
+            self.ez_send(peer, SubmitTxResponse(
+                success=True,
+                tx_hash=tx_hash,
+                message="Already known",
+            ))
+    @lazy_wrapper(GetChainHeight)
+    def on_get_chain_height(self, peer, msg):
+        # Allow server and team members to query height
+        allowed = {*self.members, self.server_public_key}
+        if peer.public_key.key_to_bin() not in allowed:
+            print(f"Received get chain height from non-allowed peer {peer.public_key.key_to_bin().hex()}, ignoring")
+            return
+        response = ChainHeightResponse(
+            request_id=msg.request_id,
+            height=self.blockchain.height,
+            tip_hash=self.blockchain.tip.hash,
+        )
+        self.ez_send(peer, response)
 
 async def main():
     MY_KEY_FILE = "INSERT KEY FILE PATH HERE"
