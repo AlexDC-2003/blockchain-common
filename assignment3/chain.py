@@ -74,3 +74,51 @@ class Block:
 
 def genesis_block():
     return Block(prev_hash=b"\x00" * HASH_SIZE, txs_hash=EMPTY_TXS_HASH, timestamp=0, difficulty=0, nonce=0, transactions=[])
+
+
+def serialize_txs(txs):
+    # 4bytes for nr of txs, then for each 2bytes for sender key len then key, 4bytes for data then actual data, 8bytes timestamp,
+    # 2 bytes for signature then the actual siganture.
+    out = struct.pack(">I", len(txs))
+    for tx in txs:
+        out += struct.pack(">H", len(tx.sender_key)) + tx.sender_key
+        out += struct.pack(">I", len(tx.data)) + tx.data
+        out += struct.pack(">q", tx.timestamp)
+        out += struct.pack(">H", len(tx.signature)) + tx.signature
+    return out
+
+
+def deserialize_txs(blob):
+    # unpack the function above
+    txs = []
+    offset = 0
+    num_txs, = struct.unpack_from(">I", blob, offset)
+    offset += 4
+    
+    for _ in range(num_txs):
+        sk_len, = struct.unpack_from(">H", blob, offset)
+        offset += 2
+        sender_key = blob[offset:offset + sk_len]
+        offset += sk_len
+        
+        data_len, = struct.unpack_from(">I", blob, offset)
+        offset += 4
+        data = blob[offset:offset + data_len]
+        offset += data_len
+        
+        timestamp, = struct.unpack_from(">q", blob, offset)
+        offset += 8
+        
+        sig_len, = struct.unpack_from(">H", blob, offset)
+        offset += 2
+        signature = blob[offset:offset + sig_len]
+        offset += sig_len
+        
+        txs.append(Transaction(
+            sender_key=sender_key,
+            data=data,
+            timestamp=timestamp,
+            signature=signature,
+        ))
+    
+    return txs
