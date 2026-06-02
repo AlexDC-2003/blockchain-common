@@ -57,7 +57,7 @@ class BlockResponse:
     nonce: int
     block_hash: bytes
     tx_hashes: bytes
-    # txs_blob: bytes   # TODO: added the transaction (ask team)
+    txs_blob: bytes
 
 @dataclass
 class BlockPropagate:
@@ -69,7 +69,7 @@ class BlockPropagate:
     nonce: int
     block_hash: bytes
     tx_hashes: bytes
-    # txs_blob: bytes   # TODO: added the transaction (ask team)
+    txs_blob: bytes
 
 convert_to_payload(SubmitTransaction, msg_id=1)
 convert_to_payload(SubmitTxResponse, msg_id=2)
@@ -127,7 +127,7 @@ class BlockchainCommunity(Community):
             nonce=block.nonce,
             block_hash=block.hash,
             tx_hashes=b"".join(tx.tx_hash() for tx in block.transactions),
-            #txs_blob=serialize_txs(block.transactions),   # TODO
+            txs_blob=serialize_txs(block.transactions),
         )
         for k in self.members:
             if k == self.my_pubkey():
@@ -186,8 +186,8 @@ class BlockchainCommunity(Community):
                 timestamp=msg.timestamp,
                 difficulty=msg.difficulty,
                 nonce=msg.nonce,
-                transactions=[]
-                #transactions=deserialize_txs(msg.txs_blob),   # TODO: changed from empty bc there might be others?
+                # transactions=[]
+                transactions=deserialize_txs(msg.txs_blob),
 
             )
             result = self.blockchain.validate_extension(block)
@@ -263,7 +263,7 @@ class BlockchainCommunity(Community):
             nonce=block.nonce,
             block_hash=block.hash,
             tx_hashes=b"".join(tx.tx_hash() for tx in block.transactions),
-            #txs_blob=serialize_txs(block.transactions),   # TODO
+            txs_blob=serialize_txs(block.transactions),
 
         )
         self.ez_send(peer, response)
@@ -284,8 +284,8 @@ class BlockchainCommunity(Community):
             timestamp=msg.timestamp,
             difficulty=msg.difficulty,
             nonce=msg.nonce,
-            transactions=[]
-            #transactions=deserialize_txs(msg.txs_blob),   # TODO: changed from empty bc there might be others?
+            # transactions=[]
+            transactions=deserialize_txs(msg.txs_blob),
 
         )
         self._pending_block_requests[msg.height].set_result(block)
