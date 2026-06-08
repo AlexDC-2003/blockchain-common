@@ -24,9 +24,9 @@ GROUP_ID = "65db51e2655da2e3"
 BLOCKCHAIN_COMMUNITY_ID = "09726633cb789f8bfa556fadea366c1954ff91ed"
 
 # TODO: fill your own .pem file name here
-MY_KEY_FILE = "ec1.pem"
+MY_KEY_FILE = "my_key.pem"
 
-
+# communication with the server
 @dataclass
 class RegisterBlockchain:
     group_id: str
@@ -50,11 +50,13 @@ class RegistrationCommunity(Community):
         super().__init__(settings)
         self.add_message_handler(RegisterResponse, self.on_response)
         self._submitted = False
+        # try to find the server every 3s until we register
         self.register_task("find_server", self.find_server, interval=3.0, delay=3.0)
  
     async def find_server(self) -> None:
         if self._submitted:
             return
+        # look through peers for the server's pubkey
         server = next(
             (p for p in self.get_peers()
              if p.public_key.key_to_bin() == bytes.fromhex(SERVER_PUBLIC_KEY)),
@@ -82,6 +84,7 @@ class RegistrationCommunity(Community):
  
  
 async def main() -> None:
+    # set up IPv8 with my key and the registration overlay
     builder = ConfigBuilder().clear_keys().clear_overlays()
     builder.add_key("my peer", "curve25519", MY_KEY_FILE)
     builder.add_overlay(
@@ -93,6 +96,7 @@ async def main() -> None:
         builder.finalize(),
         extra_communities={"RegistrationCommunity": RegistrationCommunity},
     ).start()
+    # keep running so we can receive the response
     await run_forever()
  
  
