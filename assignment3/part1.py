@@ -9,6 +9,7 @@ from ipv8.lazy_community import lazy_wrapper
 from ipv8.util import run_forever
 from ipv8_service import IPv8
 from ipv8.peer import Peer
+import asyncio
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -20,10 +21,10 @@ SERVER_PUBLIC_KEY = "4c69624e61434c504b3ae3fc099fb56ca3b5e1de9a1c843387f2acdbb78
 GROUP_ID = "65db51e2655da2e3"
 
 # Our self-chosen blockchain community ID (must match the one in community.py)
-BLOCKCHAIN_COMMUNITY_ID = "04c2aa6ce092029eeb113660172c1da47b7ab028"
+BLOCKCHAIN_COMMUNITY_ID = "09726633cb789f8bfa556fadea366c1954ff91ed"
 
 # TODO: fill your own .pem file name here
-MY_KEY_FILE = "my_key.pem"
+MY_KEY_FILE = "ec1.pem"
 
 
 @dataclass
