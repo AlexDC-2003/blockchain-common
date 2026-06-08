@@ -135,6 +135,7 @@ class Lab2Community(Community):
 
     # make sure everyone is ready
     def broadcast_ready(self):
+        # send a ready ping to each teammate (skip myself)
         for key in self.members:
             if key == self.my_pubkey():
                 continue
@@ -144,12 +145,14 @@ class Lab2Community(Community):
  
     @lazy_wrapper(ReadyPayload)
     def on_ready(self, peer, payload):
+        # mark this teammate as ready (filter out anyone not in the group)
         pk = peer.public_key.key_to_bin()
         if pk in self.members and pk != self.my_pubkey():
             self.ready_from.add(pk)
             print(f"[ready] from member{self.members.index(pk)+1}")
  
     def everyone_ready(self):
+        # ready when I can see both teammates AND both have pinged me back
         teammates = []
         for k in self.members:
             if k != self.my_pubkey():
@@ -171,7 +174,7 @@ class Lab2Community(Community):
             return True
         return False
 
-    # round starts
+    # round starts : ask the server for the next challenge
     def request_challenge(self):
         print(f"[round {self.current_round + 1}] requesting challenge")
         self.ez_send(self.server_peer, ChallengeRequestPayload(group_id=self.group_id))
@@ -184,11 +187,13 @@ class Lab2Community(Community):
         nonce = payload.nonce
 
 
+        # got the nonce, store the round
         self.current_round = round_nr
         self.current_nonce = nonce
         if round_nr not in self.collected_sigs:
             self.collected_sigs[round_nr] = {}
 
+        # send the nonce to teammates so they can sign too
         for key in self.members:
             if key == self.my_pubkey():
                 continue
@@ -196,17 +201,21 @@ class Lab2Community(Community):
             if team_peer is not None:
                 self.ez_send(team_peer, NonceAnnouncePayload(round_number=round_nr, nonce=nonce))
 
+        # sign it myself
         my_sig = self.sign(nonce)
         self.collected_sigs[round_nr][self.my_index] = my_sig
+        # resend if someone didn't get the nonce
         if self.activate_retransmission:
             asyncio.create_task(self._retransmit_nonce(round_nr))
 
     @lazy_wrapper(NonceAnnouncePayload)
     def on_nonce_announce(self, peer, payload):
+        # teammate sent me a nonce, sign it and send my signature back
         pk = peer.public_key.key_to_bin()
         if pk not in self.members:
             return
 
+        # mark internally a new round began
         round_nr = payload.round_number
         nonce = payload.nonce
         if round_nr > self.current_round:
@@ -218,6 +227,7 @@ class Lab2Community(Community):
 
     @lazy_wrapper(SignatureSharePayload)
     def on_signature_received(self, peer, payload):
+        # got a signature from a peer so i store it if its new
         pk = peer.public_key.key_to_bin()
         if pk not in self.members:
             return
@@ -229,6 +239,7 @@ class Lab2Community(Community):
         self.collected_sigs[round_nr][sender_index] = payload.signature
 
         print(f"[round {round_nr}] got sig from member{sender_index+1}")
+        # maybe we now have all 3, check and submit if so
         self._maybe_submit_bundle(round_nr)
 
     def _maybe_submit_bundle(self, rnd):
@@ -239,6 +250,7 @@ class Lab2Community(Community):
         sigs = self.collected_sigs.get(rnd, {})
         if len(sigs) != 3:  
             return
+        #assemble bundle in correct order
         sig_bundle_payload = SignatureBundlePayload(
             group_id = self.group_id,
             round_number = rnd,
@@ -248,11 +260,13 @@ class Lab2Community(Community):
         )
         print(f"[round {rnd}] submitting bundle")
         self.ez_send(self.server_peer, sig_bundle_payload)
+        # in case the server doesn't get the bundle, keep resending
         if self.activate_retransmission:
             asyncio.create_task(self._retransmit_bundle(rnd, sig_bundle_payload))
 
     @lazy_wrapper(RoundResultPayload)
     def on_round_result(self, peer, payload):
+        # got the server's reply to our submission
         if peer.public_key.key_to_bin() != self.server_pk:
             return
         if not payload.success:
@@ -261,19 +275,26 @@ class Lab2Community(Community):
         print(f"[round {payload.round_number}] success")
         print(payload.message)
         self.acked_rounds.add(payload.round_number)
+
+         # if all 3 rounds done, we're finished
         if payload.rounds_completed >= 3:
             self.all_done = True
+        
+        # tell teammates this round is done so the next submitter takes their turn
         for key in self.members:
             if key == self.my_pubkey():
                 continue
             team_peer = self._find_peer(key)
             if team_peer is not None:
                 self.ez_send(team_peer, RoundDonePayload(round_number=payload.round_number))
+        
+        # in case a teammate doesn't get the round done msg, keep resending
         if self.activate_retransmission:
             asyncio.create_task(self._retransmit_round_done(payload.round_number))
 
     @lazy_wrapper(RoundDonePayload)
     def on_round_done(self, peer, payload):
+        # some peer finished their round, see if I'm up next
         pk = peer.public_key.key_to_bin()
         if pk not in self.members:
             return
@@ -281,6 +302,7 @@ class Lab2Community(Community):
         if next_round > 3:
             self.all_done = True
             return
+        # if I'm the submitter for the next round, start it
         if self.my_index == next_round - 1:
             self.current_round = next_round
             self.request_challenge()
@@ -363,6 +385,7 @@ async def main():
     community.my_index = community.members.index(my_pk)
     print(f"I am member{community.my_index + 1}")
 
+    # wait until I see the server and both teammates as peers
     while True:
         community.server_peer = community._find_peer(community.server_pk)
         teammates_seen = True
@@ -377,6 +400,7 @@ async def main():
         await asyncio.sleep(0.5)
     print("found server and teammates")
     
+    # send ready + start the rounds. only member1 fires round 1, the rest chain after via RoundDone msgs
     done = False
     while not community.all_done:
         community.broadcast_ready()
