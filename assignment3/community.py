@@ -13,10 +13,13 @@ import time
 from chain import Block, Transaction, serialize_txs, deserialize_txs
 from node import BlockChain
 
-
+# Our self-chosen blockchain community ID (must match the one in part1.py)
 COMMUNITY_ID = bytes.fromhex("09726633cb789f8bfa556fadea366c1954ff91ed")
+# The given server public key
 SERVER_PUBLIC_KEY = bytes.fromhex("4c69624e61434c504b3ae3fc099fb56ca3b5e1de9a1c843387f2acdbb78b1bd4350ffde518068a0d246344b10d0d8c355fd0d76873e7d7f7838f3715e025af08f791324495e083331ce6")
+# The mining difficulty is set by us; we chose 24 because it prevents blocks from getting mined too fast
 MINING_DIFFICULTY = 24
+# The public keys of the 3 members
 MEMBER1 = bytes.fromhex("4c69624e61434c504b3ac117a8cfc7b28b662c9707255b962f1848c0fe7dc1938af68f116884760ea26f6e4901c5dce1ee2bfd23cbc537a9f888308cb343cd67746516a24b54a8d45e3c")
 MEMBER2 = bytes.fromhex("4c69624e61434c504b3a2203abd94c9a33c8d18f9fc76093fe83629cafa13b83f568e0519d0d16e2e6322d1413efce2211605e4ab47aff0f9880f36227b691cf20022feeeb4d73d9da64")
 MEMBER3 = bytes.fromhex("4c69624e61434c504b3a92170169432c64a01d2462ddcfd589ef83c6fb39c4892b248adb834f702a321c1050fd59c0b5510aac9e282a4b3e0416083901551b90d524df4629479eebe5d1")
@@ -58,7 +61,6 @@ class BlockResponse:
     nonce: int
     block_hash: bytes
     tx_hashes: bytes
-    # no txs_blob: must match server spec exactly
 
 @dataclass
 class BlockPropagate:
@@ -70,7 +72,7 @@ class BlockPropagate:
     nonce: int
     block_hash: bytes
     tx_hashes: bytes
-    txs_blob: bytes  # peer-to-peer only, not server-facing
+    txs_blob: bytes  # this field is only used to propagate the full transactions between teammates, the server only needs the transaction hashes
 
 convert_to_payload(SubmitTransaction, msg_id=1)
 convert_to_payload(SubmitTxResponse, msg_id=2)
@@ -78,7 +80,7 @@ convert_to_payload(GetChainHeight, msg_id=3)
 convert_to_payload(ChainHeightResponse, msg_id=4)
 convert_to_payload(GetBlock, msg_id=5)
 convert_to_payload(BlockResponse, msg_id=6)
-convert_to_payload(BlockPropagate, msg_id=7)
+convert_to_payload(BlockPropagate, msg_id=7) # the next available msg id
 
 class BlockchainSettings(CommunitySettings):
     member1_key: bytes = MEMBER1
@@ -96,11 +98,11 @@ class BlockchainCommunity(Community):
         self.group_id = settings.group_id
         self.server_public_key = SERVER_PUBLIC_KEY
         self.blockchain = BlockChain()
-        self.server_peer = None
-        self._mining_task = None
-        self._chain_updated = False
-        self._pending_block_requests: dict[int, asyncio.Future] = {}
-        self._fork_switch_lock = asyncio.Lock()
+        self.server_peer = None  # used when finding the server
+        self._mining_task = None  # used to keep track of the mining loop task
+        self._chain_updated = False  # indicates if the chain got updated while we were mining, so we can discard blocks we were in the process of mining that are not valid extensions
+        self._pending_block_requests: dict[int, asyncio.Future] = {} # used when we try to fetch blocks from peers during fork switches
+        self._fork_switch_lock = asyncio.Lock()  # prevents multiple simultaneous fork switches
 
         self.add_message_handler(BlockPropagate, self.on_block_propagate)
         self.add_message_handler(GetBlock, self.on_get_block)
@@ -117,6 +119,7 @@ class BlockchainCommunity(Community):
                 return p
         return None
 
+    # propagates a block to all members
     def propagate_block(self, block):
         msg = BlockPropagate(
             height=self.blockchain.height,
@@ -136,11 +139,13 @@ class BlockchainCommunity(Community):
             if peer is not None:
                 self.ez_send(peer, msg)
 
+    # starts the mining loop
     def start_mining(self):
         if self._mining_task and not self._mining_task.done():
             self._mining_task.cancel()
         self._mining_task = asyncio.create_task(self._mine_loop())
 
+    # the mining loop, if the chain has not been updated while mining, tries to append the mined block and propagates if to peers if valid
     async def _mine_loop(self):
         while True:
             self._chain_updated = False
@@ -152,8 +157,9 @@ class BlockchainCommunity(Community):
             if result.ok:
                 print(f"Mined new block at height {self.blockchain.height}")
                 self.propagate_block(block)
-            await asyncio.sleep(3)
+            await asyncio.sleep(3) # wait a bit before mining the next block to give more time for the propagation and reduce the chances of fork switches
 
+    # fetches a block at a given height from a peer
     async def fetch_block(self, peer, height) -> Block | None:
         future = asyncio.get_event_loop().create_future()
         self._pending_block_requests[height] = future
@@ -178,7 +184,7 @@ class BlockchainCommunity(Community):
             return
 
         elif msg.height == self.blockchain.height:
-            # tiebreaker: lower hash wins
+            # tiebreaker: lower hash wins (ensures that we don't end up in a situation with divergent chains of the same height)
             if msg.block_hash < self.blockchain.tip.hash:
                 block = Block(
                     prev_hash=msg.prev_hash,
@@ -191,10 +197,10 @@ class BlockchainCommunity(Community):
                 if not block.is_valid_pow():
                     print("Tiebreaker block has invalid PoW, ignoring")
                     return
-                self.blockchain.fork_switch(self.blockchain.height - 1, [block])
+                self.blockchain.fork_switch(self.blockchain.height - 1, [block]) # may need to fork switch if the received block's hash is lower than our tip's
                 self._chain_updated = True
-                self.propagate_block(block)
-
+                self.propagate_block(block)  # ensure all peers get the same block
+        # this is the common case, try to extend the chain with the next block that was mined by a peer
         elif msg.height == self.blockchain.height + 1:
             block = Block(
                 prev_hash=msg.prev_hash,
@@ -208,12 +214,13 @@ class BlockchainCommunity(Community):
             if result.ok:
                 print(f"Received valid block at height {msg.height} from peer {peer.public_key.key_to_bin().hex()}")
                 self.blockchain.try_append(block)
-                self.propagate_block(block)
+                self.propagate_block(block)  # ensure all peers get the same block
                 self._chain_updated = True
             else:
                 print(f"Received invalid block from peer {peer.public_key.key_to_bin().hex()}: {result.reason}")
 
         else:
+            # fork switch only if the new block is more than +1 ahead in height
             print(f"Received block propagate for height {msg.height}, more than current height {self.blockchain.height}")
             tip_block = Block(
                 prev_hash=msg.prev_hash,
@@ -225,13 +232,16 @@ class BlockchainCommunity(Community):
             )
             asyncio.create_task(self._try_fork_switch(peer, msg.height, tip_block))
 
+    # tries to switch to a different fork, from a new tip block and height
     async def _try_fork_switch(self, peer, tip_height, tip_block):
+        # only allow one fork switch at a time to avoid concurrency issues
         async with self._fork_switch_lock:
             if tip_height <= self.blockchain.height:
                 print("Chain already caught up, skipping fork switch")
                 return
             new_blocks = [tip_block]
             current_height = tip_height - 1
+            # find the fork point by going backwards from the new tip, fetching blocks from peer
             while current_height > 0:
                 earliest_block = new_blocks[0]
                 if current_height < len(self.blockchain.blocks) and earliest_block.prev_hash == self.blockchain.blocks[current_height].hash:
@@ -252,7 +262,7 @@ class BlockchainCommunity(Community):
                     return
             print(f"Switching to new fork at fork point {fork_point}")
             self.blockchain.fork_switch(fork_point, new_blocks)
-            self.propagate_block(self.blockchain.tip)
+            self.propagate_block(self.blockchain.tip)  # ensure all peers get the new tip
             self._chain_updated = True
 
     @lazy_wrapper(GetBlock)
@@ -284,21 +294,22 @@ class BlockchainCommunity(Community):
 
     @lazy_wrapper(BlockResponse)
     def on_block_response(self, peer, msg):
-        # BlockResponse no longer has txs_blob, so reconstructed blocks have empty transactions
         if peer.public_key.key_to_bin() not in self.members:
             print(f"Received block response from non-member peer {peer.public_key.key_to_bin().hex()}, ignoring")
             return
         future = self._pending_block_requests.get(msg.height)
+        # only allow block responses that we are expecting
         if future is None:
             print(f"Received unexpected block response for height {msg.height} from peer {peer.public_key.key_to_bin().hex()}, ignoring")
             return
+        # reconstruct block from the response message
         block = Block(
             prev_hash=msg.prev_hash,
             txs_hash=msg.txs_hash,
             timestamp=msg.timestamp,
             difficulty=msg.difficulty,
             nonce=msg.nonce,
-            transactions=[],  # no txs_blob in BlockResponse; headers only needed for fork switch
+            transactions=[],
         )
         self._pending_block_requests[msg.height].set_result(block)
 
@@ -375,10 +386,11 @@ class BlockchainCommunity(Community):
 
 
 async def main():
-    MY_KEY_FILE = "KEY FILE PATH"
+    MY_KEY_FILE = "KEY FILE PATH" # to be replaced with the path to the private key file
     GROUP_ID = "65db51e2655da2e3"
     builder = ConfigBuilder().clear_keys().clear_overlays()
     builder.add_key("my key", "curve25519", MY_KEY_FILE)
+    # setup the overlay with random walk strategy, with the member keys and group id
     builder.add_overlay(
         "BlockchainCommunity", "my key",
         [WalkerDefinition(Strategy.RandomWalk, 50, {"timeout": 1.0})],
@@ -391,6 +403,7 @@ async def main():
         },
         [],
     )
+    # start IPv8 with the blockchain community
     ipv8 = IPv8(builder.finalize(), extra_communities={"BlockchainCommunity": BlockchainCommunity})
     await ipv8.start()
     community = ipv8.get_overlay(BlockchainCommunity)
@@ -400,6 +413,7 @@ async def main():
         await ipv8.stop()
         return
     while True:
+        # wait until finding the server and teammates
         community.server_peer = community._find_peer(community.server_public_key)
         teammates_seen = True
         for k in community.members:
@@ -412,6 +426,7 @@ async def main():
             break
         await asyncio.sleep(0.5)
     print("found server and teammates")
+    # start mining after finding server and teammates
     community.start_mining()
     try:
         await asyncio.sleep(float("inf"))

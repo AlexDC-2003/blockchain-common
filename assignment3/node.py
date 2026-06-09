@@ -75,6 +75,7 @@ class BlockChain:
                 new_mempool.append(tx)
         self.mempool = new_mempool
 
+    # switches to a different fork, from a given fork point and a list of new blocks to add on top of it
     def fork_switch(self, fork_point, new_blocks):
         discarded_txs = []
         for block in self.blocks[fork_point + 1:]:
@@ -89,6 +90,7 @@ class BlockChain:
         for tx in discarded_txs:
             self.add_transaction(tx)
 
+    # the same as mine_next, but does not append the block to the chain, so we can check it is a valid extension beforehand
     def prepare_next(self, difficulty, timestamp = None, max_txs = None):
         if timestamp is not None:
             ts = timestamp
