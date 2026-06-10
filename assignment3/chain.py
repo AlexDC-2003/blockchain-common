@@ -90,9 +90,10 @@ def genesis_block():
 
 
 def serialize_txs(txs):
+    # wire format for a list of transactions (all integers big-endian)
     # 4bytes for nr of txs, then for each 2bytes for sender key len then key, 4bytes for data then actual data, 8bytes timestamp,
     # 2 bytes for signature then the actual siganture.
-    out = struct.pack(">I", len(txs))  # tx count
+    out = struct.pack(">I", len(txs))
     for tx in txs:
         out += struct.pack(">H", len(tx.sender_key)) + tx.sender_key
         out += struct.pack(">I", len(tx.data)) + tx.data
@@ -102,10 +103,10 @@ def serialize_txs(txs):
 
 
 def deserialize_txs(blob):
-    # unpack the function above: walk the blob field by field, advancing `offset` as we go
+    # unpack the function above
     txs = []
     offset = 0
-    num_txs, = struct.unpack_from(">I", blob, offset)  # how many txs to read
+    num_txs, = struct.unpack_from(">I", blob, offset)
     offset += 4
 
     for _ in range(num_txs):

@@ -78,6 +78,20 @@ python community.py
 
 Each node joins the blockchain community, discovers the others, and starts mining. The server queries the nodes in the background; pass confirmation can be seen when running `part1.py` again after a good-looking run.
 
+### Tests
+
+Unit tests for the chain primitives and single-node mining + validation live in `assignment3/tests/`. Run them with `pytest` from a virtualenv:
+
+```bash
+cd assignment3
+python3 -m venv .venv          # needs python3-venv (sudo apt install python3-venv)
+source .venv/bin/activate
+pip install pytest
+pytest tests/
+```
+
+`tests/conftest.py` puts `assignment3/` on `sys.path` so the tests import `chain`/`node` the same way the rest of the code does. Always run via `pytest` (not `python3 tests/test_chain.py` directly), otherwise the import path isn't set up.
+
 ### Notes
 - Uses the same `.pem` from Lab 1.
 - Mining difficulty is set high enough (`MINING_DIFFICULTY = 24`) + a 3s sleep between blocks to keep propagation ahead of new blocks and prevent the 3 chains from diverging.
